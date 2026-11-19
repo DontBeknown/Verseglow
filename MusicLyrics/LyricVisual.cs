@@ -6,6 +6,7 @@ using System.Text.RegularExpressions;
 using System.Windows;
 using System.Windows.Media;
 using System.Windows.Media.Effects;
+using System.Windows.Threading;
 
 namespace MusicLyrics;
 
@@ -30,7 +31,12 @@ internal sealed class LyricVisual : FrameworkElement
     private Preset preset = Preset.BuiltIns[0];
     private Entrance entrance;
     private long started;
-    private bool animating;
+    private readonly DispatcherTimer animationTimer = new(DispatcherPriority.Background)
+    {
+        Interval = TimeSpan.FromMilliseconds(34)
+    };
+    private readonly DrawingGroup lineText = new();
+    private DrawingGroup? popText;
     private double progress = 1;
     private FormattedText? layout;
     private (Geometry? Clip, Geometry? Glyphs)[] ripple = [];
@@ -63,6 +69,7 @@ internal sealed class LyricVisual : FrameworkElement
     public LyricVisual()
     {
         ClipToBounds = true;
+        animationTimer.Tick += OnFrame;
         SizeChanged += (_, _) => ClearLayout();
         Unloaded += (_, _) => Finish();
     }
@@ -70,7 +77,7 @@ internal sealed class LyricVisual : FrameworkElement
     public void SetLine(string line, Preset style, bool animate, long startTick, double lineMs = 2400,
         string? language = null, long cue = 0)
     {
-        StopRendering();
+        animationTimer.Stop();
         text = line;
         this.language = language;
         this.cue = cue;
@@ -93,10 +100,7 @@ internal sealed class LyricVisual : FrameworkElement
         progress = entrance == Entrance.Instant ? 1 :
             Math.Clamp(Stopwatch.GetElapsedTime(started).TotalMilliseconds / animationMs, 0, 1);
         if (line.Length > 0 && progress < 1)
-        {
-            animating = true;
-            CompositionTarget.Rendering += OnFrame;
-        }
+            animationTimer.Start();
         ClearLayout();
     }
 
@@ -107,17 +111,10 @@ internal sealed class LyricVisual : FrameworkElement
 
     public void Finish()
     {
-        StopRendering();
+        animationTimer.Stop();
         if (progress == 1) return;
         progress = 1;
-        InvalidateVisual();
-    }
-
-    private void StopRendering()
-    {
-        if (!animating) return;
-        CompositionTarget.Rendering -= OnFrame;
-        animating = false;
+        UpdateAnimation();
     }
 
     private void OnFrame(object? sender, EventArgs args)
@@ -135,21 +132,37 @@ internal sealed class LyricVisual : FrameworkElement
             if (unchanged) return;
         }
         progress = next;
-        if (progress == 1) StopRendering();
-        InvalidateVisual();
+        if (progress == 1) animationTimer.Stop();
+        UpdateAnimation();
+    }
+
+    private void UpdateAnimation()
+    {
+        if (popText is null)
+        {
+            InvalidateVisual();
+            return;
+        }
+
+        var transform = (ScaleTransform)popText.Transform;
+        var scale = 1 - (1 - preset.Scale) * Math.Pow(1 - progress, 3);
+        transform.ScaleX = scale;
+        transform.ScaleY = scale;
+        popText.Opacity = progress;
     }
 
     private void ClearLayout()
     {
         layout = null;
         ripple = [];
+        popText = null;
         InvalidateVisual();
     }
 
     private void DrawLyrics(DrawingContext drawing)
     {
         if (outline != null) drawing.DrawGeometry(null, outline, glyphs);
-        drawing.DrawText(layout!, origin);
+        drawing.DrawDrawing(lineText);
     }
 
     protected override void OnDpiChanged(DpiScale oldDpi, DpiScale newDpi)
@@ -194,7 +207,7 @@ internal sealed class LyricVisual : FrameworkElement
             };
             LanguageTypography.Apply(layout, text, preset.LanguageFonts, language);
             var stackSize = preset.Effect == Entrance.Stack && SimpleReadingOrder.IsMatch(text);
-                        if (preset.MaxHighlightWords > 0 && (preset.HighlightFontSize.HasValue || stackSize ||
+            if (preset.MaxHighlightWords > 0 && (preset.HighlightPercent.HasValue || stackSize ||
                 (preset.MaxLineColors > 1 && preset.AccentColors.Length > 0)))
             {
                 var emphasis = new Random(HashCode.Combine(text, cue));
@@ -218,20 +231,24 @@ internal sealed class LyricVisual : FrameworkElement
                         var accent = accents[emphasis.Next(accentCount)];
                         layout.SetForegroundBrush(new SolidColorBrush((Color)ColorConverter.ConvertFromString(accent)), word.Index, word.Length);
                     }
-                    if (preset.HighlightFontSize is int size)
-                        layout.SetFontSize(size, word.Index, word.Length);
+                    if (preset.HighlightPercent is int percent)
+                        layout.SetFontSize(preset.FontSize * percent / 100, word.Index, word.Length);
                     else if (stackSize)
                         layout.SetFontSize(preset.FontSize * (1.10 + .10 * emphasis.NextDouble()), word.Index, word.Length);
                 }
             }
-origin = new Point(12, Math.Max(0, (ActualHeight - layout.Height) / 2));
+            origin = new Point(12, Math.Max(0, (ActualHeight - layout.Height) / 2));
             outline = preset.Outline > 0 ? new Pen(new SolidColorBrush((Color)ColorConverter.ConvertFromString(preset.OutlineColor)), preset.Outline * 2) { LineJoin = PenLineJoin.Round } : null;
             glyphs = outline != null || preset.Tilt > 0 || preset.Scatter ? layout.BuildGeometry(origin) : null;
             placement = null;
             if ((preset.Tilt > 0 || preset.Scatter) && glyphs is { Bounds.IsEmpty: false })
             {
                 var bounds = glyphs.GetRenderBounds(outline);
-                var angleEligible = layout.Height < 1.8 * preset.FontSize && bounds.Width + 12 <= ActualWidth && bounds.Height + 8 <= ActualHeight;
+                var fullHeight = layout.Height;
+                var maxLines = layout.MaxLineCount;
+                layout.MaxLineCount = 1;
+                var angleEligible = layout.Height == fullHeight && bounds.Width + 12 <= ActualWidth && bounds.Height + 8 <= ActualHeight;
+                layout.MaxLineCount = maxLines;
                 var angle = angleEligible ? (2 * random.NextDouble() - 1) * preset.Tilt : 0;
                 var matrix = Matrix.Identity;
                 matrix.RotateAt(angle, bounds.X + bounds.Width / 2, bounds.Y + bounds.Height / 2);
@@ -258,6 +275,18 @@ origin = new Point(12, Math.Max(0, (ActualHeight - layout.Height) / 2));
                     wordGlyphs?.Freeze();
                     return (clip, wordGlyphs);
                 }).ToArray();
+            }
+            using (var cached = lineText.Open())
+                cached.DrawText(layout, origin);
+            if (entrance == Entrance.Pop && progress < 1)
+            {
+                popText = new DrawingGroup
+                {
+                    Transform = new ScaleTransform(1, 1, ActualWidth / 2, ActualHeight / 2)
+                };
+                UpdateAnimation();
+                using var popDrawing = popText.Open();
+                DrawLyrics(popDrawing);
             }
         }
 
@@ -317,7 +346,7 @@ origin = new Point(12, Math.Max(0, (ActualHeight - layout.Height) / 2));
                 drawing.PushOpacity(entrance == Entrance.Fill ? 1 : opacity);
                 if (word.Glyphs != null) drawing.DrawGeometry(null, outline, word.Glyphs);
                 drawing.PushClip(clip);
-                drawing.DrawText(layout!, origin);
+                drawing.DrawDrawing(lineText);
                 drawing.Pop();
                 drawing.Pop();
                 if (sweeping || entrance is Entrance.Stack or Entrance.Tilt) drawing.Pop();
@@ -325,16 +354,14 @@ origin = new Point(12, Math.Max(0, (ActualHeight - layout.Height) / 2));
             if (placement != null) drawing.Pop();
             return;
         }
-        drawing.PushOpacity(progress);
-        if (entrance == Entrance.Pop && progress < 1)
+        if (popText is not null)
+            drawing.DrawDrawing(popText);
+        else
         {
-            var scale = 1 - (1 - preset.Scale) * Math.Pow(1 - progress, 3);
-            drawing.PushTransform(new ScaleTransform(scale, scale, ActualWidth / 2, ActualHeight / 2));
+            drawing.PushOpacity(progress);
             DrawLyrics(drawing);
             drawing.Pop();
         }
-        else DrawLyrics(drawing);
-        drawing.Pop();
         if (placement != null) drawing.Pop();
     }
 }

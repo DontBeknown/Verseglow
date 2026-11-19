@@ -28,7 +28,19 @@ internal sealed record Preset(string Name, Entrance Effect, double FontSize, str
     public string[] AccentColors { get; init; } = [];
     public int MaxLineColors { get; init; } = 2;
     public int MaxHighlightWords { get; init; } = 1;
-    public int? HighlightFontSize { get; init; }
+    public int? HighlightPercent { get; init; }
+    // Read absolute sizes from older presets, including their saved reset defaults.
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public int? HighlightFontSize
+    {
+        get => null;
+        init
+        {
+            if (value is int size)
+                HighlightPercent ??= size is >= 12 and <= 100 && FontSize is >= 12 and <= 100
+                    ? (int)Math.Round(100 * size / FontSize) : 0;
+        }
+    }
     public bool RandomPalettePerSong { get; init; }
 
     public Preset ForSong(Track? track)
@@ -77,7 +89,7 @@ internal sealed record Preset(string Name, Entrance Effect, double FontSize, str
         FontSize is >= 12 and <= 100 && ValidColor(Color) && Background is >= 0 and <= 1 &&
         Outline is >= 0 and <= 6 && Tilt is >= 0 and <= 15 && ValidColor(OutlineColor) &&
         MaxLineColors is >= 1 and <= MaxAccentColors + 1 && MaxHighlightWords is >= 0 and <= 32 &&
-        HighlightFontSize is null or (>= 12 and <= 100) &&
+        HighlightPercent is null or (>= 12 and <= 833) &&
         AccentColors is { Length: <= MaxAccentColors } && AccentColors.All(ValidColor) &&
         (Font is null || ValidFont(Font)) && LanguageFonts is not null &&
         LanguageFonts.All(kv => LanguageTypography.Languages.ContainsKey(kv.Key) && ValidFont(kv.Value)) &&

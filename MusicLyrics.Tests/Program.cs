@@ -22,13 +22,19 @@ var colors = factory with { AccentColors = ["#112233", "#334455"] };
 Check(LyricVisual.WordVisible(0, 0, 4) && !LyricVisual.WordVisible(.24, 1, 4) &&
     LyricVisual.WordVisible(.25, 1, 4) && LyricVisual.WordVisible(.75, 3, 4), "Word reveal spans the cue");
 
+var monitor = new System.Drawing.Rectangle(-1920, 0, 1920, 1080);
+Check(Native.CoversMonitor(new Native.Rect { Left = -1920, Right = 0, Bottom = 1080 }, monitor) &&
+    !Native.CoversMonitor(new Native.Rect { Left = -1920, Right = 0, Bottom = 1040 }, monitor),
+    "Fullscreen detection handles a secondary monitor and excludes windows that leave room for the taskbar");
+
 var settingsFile = Path.GetTempFileName();
 try
 {
     File.WriteAllText(settingsFile, """
-        {"ActivePreset":"Frosted Cinema","Custom":[{"Name":"Legacy","Effect":4,"FontSize":42,"Color":"#FFFFFF","Background":0.5,"Duration":170,"Scale":0.92}]}
+        {"ActivePreset":"Frosted Cinema","Custom":[{"Name":"Legacy","Effect":4,"HighlightFontSize":63,"FontSize":42,"Color":"#FFFFFF","Background":0.5,"Duration":170,"Scale":0.92}]}
         """);
     var settings = Preferences.Load(settingsFile);
+    Check(settings.Custom.Single().HighlightPercent == 150, "Legacy highlights keep their size relative to the base");
     Check(settings.Custom.Single().StageStackSpeed == 1, "Older presets default to the original Stage Stack speed");
     Check(settings.Presets.Single(p => p.Name == settings.ActivePreset).Effect == Entrance.Cinema,
         "Legacy settings use the updated Frosted Cinema factory effect");
@@ -133,6 +139,20 @@ var exact = new LyricResult(1, "Song", "Artist", "Album", 182, "[00:01]line");
 Check(Lyrics.Match(track, [exact with { Title = "Artist - Song (Official Lyric Video)" }],
     browser: true)?.Id == 1, "Browser and provider metadata use the same title normalization");
 Check(Lyrics.Match(track, [exact]) == exact, "Two seconds is inclusive");
+var extracted = Lyrics.BrowserFallback(new Track("Artist – Song (Official Video)", "Uploader", "", 180));
+Check(extracted.Title == "Song" && extracted.Artist == "Artist", "Browser fallback extracts artist and title");
+var closest = exact with { Id = 9, Duration = 180 };
+Check(Lyrics.BestMatch(extracted, [closest with { Artist = "Uploader" }, exact, closest,
+    closest with { Title = "Song (Live)" }, closest with { TimedLyrics = "plain" }]) == closest,
+    "Browser fallback selects the closest timed recording by the extracted artist");
+Check(Lyrics.BestMatch(extracted, [closest with { Id = 10, TimedLyrics = "[00:05]Different" }, closest]) == closest,
+    "Equally close timed results have a stable winner");
+var approximate = closest with { Title = "Song (Live)", Duration = 191 };
+Check(Lyrics.BestMatch(extracted, [closest with { TimedLyrics = "plain" }, approximate]) == approximate,
+    "Fallback accepts a usable timed result with different metadata and duration");
+Check(Lyrics.BestMatch(extracted with { Artist = "", Duration = null }, [closest]) == closest &&
+    Lyrics.BestMatch(extracted, [closest with { TimedLyrics = "plain" }]) is null,
+    "Title-only lookup accepts timed lyrics and skips unusable content");
 var handler = new FixtureLyricsHandler();
 using (var online = new Lrclib(null, handler))
 {
@@ -147,6 +167,11 @@ using (var online = new Lrclib(null, handler))
     var browserResults = await online.SearchAsync(youtube.Title, youtube.Artist, youtube.Album, default);
     Check(Lyrics.Match(youtube, browserResults, browser: true)?.Id == 42 && handler.LastUri?.Query ==
         "?track_name=Song&artist_name=Artist", "YouTube metadata produces a timed lookup");
+    var fallbackResults = await online.SearchAsync(extracted.Title, extracted.Artist, "", default);
+    Check(Lyrics.BestMatch(extracted, fallbackResults)?.Id == 42 && handler.LastUri?.Query ==
+        "?track_name=Song&artist_name=Artist", "Fallback sends the extracted title and artist without an album filter");
+    await online.SearchByTitleAsync("Song & More", default);
+    Check(handler.LastUri?.Query == "?q=Song%20%26%20More", "Title-only keyword search encodes the search text");
 }
 Check(Lyrics.Match(track, [exact with { Duration = 182.001 }]) is null, "Over two seconds rejected");
 Check(Lyrics.Match(track, [exact, exact with { Id = 2 }]) is null, "Ambiguous timed recordings rejected");
@@ -294,11 +319,23 @@ Render(accented, false, "Solo");
         sawTwo |= highlighted == 2;
     }
     Check(sawTwo, "Multiple words can be highlighted");
-    var sizeOnly = limited with { MaxLineColors = 1, HighlightFontSize = 60 };
+    var sizeOnly = limited with { MaxLineColors = 1, HighlightPercent = 200 };
     Render(sizeOnly, false, "I");
     var enlarged = BrightPixels();
+    Render(sizeOnly with { FontSize = sizeOnly.FontSize / 2 }, false, "I");
+    Check(BrightPixels() < enlarged, "Highlight size follows the base font");
     Render(sizeOnly with { MaxHighlightWords = 0 }, false, "I");
     Check(enlarged > BrightPixels(), "Highlighted font size works with a single text color");
+    Render(sizeOnly with { Scatter = true }, false, "รัก");
+    var thaiFrame = Rasterize();
+    var thaiColumns = pixels.Where(i => thaiFrame[i + 2] > 180).Select(i => i / 4 % (int)bounds.Width).ToArray();
+    Check(Math.Abs((thaiColumns.Min() + thaiColumns.Max() + 1) / 2.0 - bounds.Width / 2) > 2,
+        "A tall single Thai word can scatter away from the center");
+    const string twoLines = "รัก\nรัก";
+    Render(accented with { Tilt = 3 }, false, twoLines);
+    var centeredLines = Rasterize();
+    Render(accented with { Tilt = 3, Scatter = true }, false, twoLines);
+    Check(Rasterize().SequenceEqual(centeredLines), "Multi-line Thai lyrics stay centered");
 Render(cinema, true);
     if (Native.AnimationsEnabled())
     {
@@ -308,6 +345,14 @@ Render(cinema, true);
             "Cinema starts with a text-only blur");
         Render(cinema with { Effect = Entrance.Fade }, true);
         Check(VisualTreeHelper.GetChildrenCount(visual) == 0, "Soft Fade has no text blur");
+
+        var pop = Preset.BuiltIns.First(p => p.Effect == Entrance.Pop) with { Duration = 1000 };
+        Render(pop, false);
+        var fullPop = Rasterize();
+        Render(pop, true, elapsed: 500);
+        Check(!Rasterize().SequenceEqual(fullPop), "Pop shows a partially animated frame");
+        visual.Finish();
+        Check(Rasterize().SequenceEqual(fullPop), "Finishing Pop restores full size and opacity");
 
         var stack = Preset.BuiltIns.First(p => p.Effect == Entrance.Stack);
         Render(stack, false);

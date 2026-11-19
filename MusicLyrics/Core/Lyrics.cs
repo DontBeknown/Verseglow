@@ -60,6 +60,42 @@ internal static partial class Lyrics
         return track with { Title = title, Artist = artist.Length > 0 ? artist : track.Artist };
     }
 
+    public static Track BrowserFallback(Track raw)
+    {
+        var track = BrowserTrack(raw);
+        var title = BrowserTitle(raw.Title, "");
+        if (!Equal(title, track.Title)) return track;
+        var parts = title.Split([" - ", " – ", " — "], 2, StringSplitOptions.TrimEntries);
+        return parts.Length == 2 && parts.All(part => part.Length > 0)
+            ? track with { Artist = parts[0], Title = parts[1] }
+            : track;
+    }
+
+    [GeneratedRegex(@"[\p{L}\p{M}\p{N}]+")]
+    private static partial Regex MetadataWords();
+
+    public static LyricResult? BestMatch(Track track, IEnumerable<LyricResult> results)
+    {
+        return results.Where(result => !string.IsNullOrWhiteSpace(result.TimedLyrics))
+            .OrderByDescending(result => 2 * Similarity(track.Title, BrowserTitle(result.Title, result.Artist)) +
+                Similarity(track.Artist, result.Artist))
+            .ThenByDescending(result => track.Album.Length > 0 && Equal(track.Album, result.Album))
+            .ThenBy(result => Math.Abs((track.Duration - result.Duration) ?? double.PositiveInfinity))
+            .ThenBy(result => result.Id)
+            .FirstOrDefault(result => Parse(result.TimedLyrics!).Count > 0);
+    }
+
+    private static double Similarity(string left, string right)
+    {
+        if (Equal(left, right)) return 1;
+        var expected = MetadataWords().Matches(left).Select(word => word.Value).ToArray();
+        var actual = MetadataWords().Matches(right).Select(word => word.Value).ToArray();
+        if (expected.Length == 0 || actual.Length == 0) return 0;
+        if (expected.SequenceEqual(actual, StringComparer.OrdinalIgnoreCase)) return 1;
+        return (double)expected.Intersect(actual, StringComparer.OrdinalIgnoreCase).Count() /
+            Math.Max(expected.Length, actual.Length);
+    }
+
     public static IReadOnlyList<LyricLine> Parse(string text)
     {
         var language = Regex.Match(text, @"(?im)^\s*\[la:\s*([a-z]{2,3}(?:-[a-z0-9]{2,8})*)\s*\]\s*$").Groups[1].Value;

@@ -215,28 +215,44 @@ internal sealed class Player : IDisposable
         var revision = Revision;
         if (pendingLookup == revision) return;
         requestedRevision = revision;
-        if (string.IsNullOrWhiteSpace(track.Artist))
-        {
-            lookupStatus = "Track artist is missing. Search manually or import a local LRC.";
-            Changed?.Invoke();
-            return;
-        }
+        var browserTrack = IsBrowser ? Track : null;
         lookupStatus = "Looking up timed lyrics…";
         pendingLookup = revision;
         var cancellation = lookup.Token;
         Changed?.Invoke();
         try
         {
-            var results = await provider.SearchAsync(track.Title, track.Artist, track.Album, cancellation);
+            IReadOnlyList<LyricResult> results = [];
+            if (!string.IsNullOrWhiteSpace(track.Artist))
+                results = await provider.SearchAsync(track.Title, track.Artist, track.Album, cancellation);
             if (disposed || cancellation.IsCancellationRequested || revision != Revision || selection.IsManual) return;
-            var match = Lyrics.Match(SearchTrack ?? track, results, IsBrowser);
+            var exact = Lyrics.Match(SearchTrack ?? track, results, browserTrack is not null);
+            var match = exact;
+            if (match is null)
+            {
+                var fallback = browserTrack is null ? track : Lyrics.BrowserFallback(browserTrack);
+                if (!string.IsNullOrWhiteSpace(fallback.Artist) &&
+                    (track.Album.Length > 0 || fallback.Title != track.Title || fallback.Artist != track.Artist))
+                {
+                    var extracted = await provider.SearchAsync(fallback.Title, fallback.Artist, "", cancellation);
+                    if (disposed || cancellation.IsCancellationRequested || revision != Revision || selection.IsManual) return;
+                    results = results.Concat(extracted).ToArray();
+                }
+                match = Lyrics.BestMatch(fallback with { Duration = Track?.Duration }, results);
+                if (match is null)
+                {
+                    var broader = await provider.SearchByTitleAsync(fallback.Title, cancellation);
+                    if (disposed || cancellation.IsCancellationRequested || revision != Revision || selection.IsManual) return;
+                    match = Lyrics.BestMatch(fallback with { Duration = Track?.Duration }, broader);
+                }
+            }
             if (match?.TimedLyrics is { } lrc)
             {
-                if (Attach(revision, Lyrics.Parse(lrc), manual: false)) automaticMatch = match;
+                if (Attach(revision, Lyrics.Parse(lrc), manual: false)) automaticMatch = exact;
             }
             else
             {
-                lookupStatus = "No unambiguous timed match. Search manually or import a local LRC.";
+                lookupStatus = "Online search found no usable timed lyrics. Search manually or import a local LRC.";
                 Changed?.Invoke();
             }
         }

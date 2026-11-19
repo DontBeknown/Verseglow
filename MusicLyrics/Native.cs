@@ -16,6 +16,7 @@ internal static class Native
     private const int Transparent = 0x20;
     private const int ToolWindow = 0x80;
     private const int NoActivate = 0x08000000;
+    private const int ExtendedFrameBounds = 9;
 
     [StructLayout(LayoutKind.Sequential)]
     public struct Rect
@@ -40,6 +41,12 @@ internal static class Native
         int width, int height, uint flags);
     [DllImport("user32.dll")]
     public static extern bool GetWindowRect(nint window, out Rect rect);
+    [DllImport("user32.dll")]
+    private static extern nint GetForegroundWindow();
+    [DllImport("user32.dll")]
+    private static extern nint GetShellWindow();
+    [DllImport("dwmapi.dll")]
+    private static extern int DwmGetWindowAttribute(nint window, int attribute, out Rect rect, int size);
     [DllImport("user32.dll")]
     private static extern nint MonitorFromPoint(Point point, uint flags);
     [DllImport("shcore.dll")]
@@ -95,6 +102,18 @@ internal static class Native
 
     public static bool AnimationsEnabled() =>
         SystemParametersInfoW(0x1042, 0, out var enabled, 0) && enabled;
+
+    public static bool ForegroundCoversMonitor()
+    {
+        var window = GetForegroundWindow();
+        return window != 0 && window != GetShellWindow() &&
+            DwmGetWindowAttribute(window, ExtendedFrameBounds, out var bounds, Marshal.SizeOf<Rect>()) == 0 &&
+            CoversMonitor(bounds, Screen.FromHandle(window).Bounds);
+    }
+
+    internal static bool CoversMonitor(Rect bounds, System.Drawing.Rectangle monitor) =>
+        bounds.Left <= monitor.Left && bounds.Top <= monitor.Top &&
+        bounds.Right >= monitor.Right && bounds.Bottom >= monitor.Bottom;
 
     private static int Round(double value) => (int)Math.Round(value);
 }

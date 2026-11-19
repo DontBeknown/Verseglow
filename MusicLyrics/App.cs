@@ -128,12 +128,17 @@ internal sealed class App : Application
             ApplyPlacement();
         }
         var style = Active.ForSong(player.Track);
-        if (backdropBlur != style.Blur)
+        var pauseInFullscreen = style.Effect is not (Entrance.Instant or Entrance.Pop);
+        var fullscreen = (animate && pauseInFullscreen || style.Blur) &&
+            Native.ForegroundCoversMonitor();
+        var blur = style.Blur && !fullscreen;
+        if (backdropBlur != blur)
         {
-            Native.SetBackdropBlur(new WindowInteropHelper(overlay).Handle, style.Blur);
-            backdropBlur = style.Blur;
+            Native.SetBackdropBlur(new WindowInteropHelper(overlay).Handle, blur);
+            backdropBlur = blur;
         }
-        visual.SetLine(line, style, animate, stamp, span, player.CurrentLanguage, player.CurrentCue);
+        visual.SetLine(line, style, animate && !(fullscreen && pauseInFullscreen), stamp, span,
+            player.CurrentLanguage, player.CurrentCue);
     }
 
     private void Toggle()

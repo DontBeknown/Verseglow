@@ -51,7 +51,7 @@ internal sealed class SettingsWindow : Window
     private readonly ComboBox family = new();
     private readonly ComboBox maxLineColors = new() { ItemsSource = Enumerable.Range(1, Preset.MaxAccentColors + 1) };
     private readonly ComboBox maxHighlightWords = new() { ItemsSource = Enumerable.Range(0, 33) };
-    private readonly ComboBox highlightSize = new() { ItemsSource = Enumerable.Range(12, 89).Cast<object>().Prepend("Preset default") };
+    private readonly ComboBox highlightSize = new();
     private readonly Slider outline = Slider(0, 6, .5);
     private readonly Slider tilt = Slider(0, 15, 1);
     private readonly CheckBox scatter = new() { Content = "Scatter short lines inside the overlay" };
@@ -223,7 +223,7 @@ internal sealed class SettingsWindow : Window
             durationField, scaleField, stackSpeedField, Field("Maximum tilt (degrees)", tilt), scatter));
         editor.Children.Add(InspectorSection("Typography", false, Field("_Font size", font),
             Field("Font for language", language), Field("Font family", family),
-            Field("Highlighted font size", highlightSize), Field("Outline width", outline)));
+            Field("Highlight size (% of base font)", highlightSize), Field("Outline width", outline)));
         editor.Children.Add(InspectorSection("Color and emphasis", false, Field("Color _palette", palette), swatches, addColor,
             Field("Maximum text colors per line (includes main color)", maxLineColors),
             Field("Maximum highlighted words per line", maxHighlightWords), outlinePicker,
@@ -453,7 +453,10 @@ UpdatePalette();
         font.Value = preset.FontSize;
         maxLineColors.SelectedItem = preset.MaxLineColors;
         maxHighlightWords.SelectedItem = preset.MaxHighlightWords;
-        highlightSize.SelectedIndex = preset.HighlightFontSize is int size ? size - 11 : 0;
+        var percentages = Enumerable.Range(10, 31).Select(step => step * 5);
+        if (preset.HighlightPercent is int percent) percentages = percentages.Append(percent).Distinct().Order();
+        highlightSize.ItemsSource = percentages.Cast<object>().Prepend("Preset default").ToArray();
+        highlightSize.SelectedItem = (object?)preset.HighlightPercent ?? "Preset default";
         UpdatePalette();
         UpdateOutlineSwatch();
         background.Value = preset.Background;
@@ -598,7 +601,7 @@ UpdatePalette();
         CommitPreset(draft with
         {
             MaxLineColors = (int)maxLineColors.SelectedItem, MaxHighlightWords = (int)maxHighlightWords.SelectedItem,
-            HighlightFontSize = highlightSize.SelectedItem as int?,
+            HighlightPercent = highlightSize.SelectedItem as int?,
             Effect = effect, Outline = outline.Value, Tilt = tilt.Value, Scatter = scatter.IsChecked == true,
             Blur = blur.IsChecked == true, FontSize = font.Value, Background = background.Value,
             Duration = (int)duration.Value, Scale = scale.Value, StageStackSpeed = stageStackSpeed.Value

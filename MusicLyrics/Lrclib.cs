@@ -47,16 +47,25 @@ internal sealed class Lrclib : IDisposable
         return true;
     }
 
-    public async Task<IReadOnlyList<LyricResult>> SearchAsync(string title, string artist, string album,
+    public Task<IReadOnlyList<LyricResult>> SearchAsync(string title, string artist, string album,
         CancellationToken cancellation)
+    {
+        var query = $"track_name={Uri.EscapeDataString(title)}";
+        if (!string.IsNullOrWhiteSpace(artist)) query += $"&artist_name={Uri.EscapeDataString(artist)}";
+        if (!string.IsNullOrWhiteSpace(album)) query += $"&album_name={Uri.EscapeDataString(album)}";
+        return SearchAsync(query, cancellation);
+    }
+
+    public Task<IReadOnlyList<LyricResult>> SearchByTitleAsync(string title, CancellationToken cancellation) =>
+        SearchAsync($"q={Uri.EscapeDataString(title.Trim())}", cancellation);
+
+    private async Task<IReadOnlyList<LyricResult>> SearchAsync(string query, CancellationToken cancellation)
     {
         if (contactHeader is not { } header) return [];
         await requests.WaitAsync(cancellation);
         try
         {
             if (retryAfter > DateTimeOffset.UtcNow) throw new InvalidOperationException("Lyrics service is rate limited. Try again later.");
-            var query = $"track_name={Uri.EscapeDataString(title)}&artist_name={Uri.EscapeDataString(artist)}";
-            if (!string.IsNullOrWhiteSpace(album)) query += $"&album_name={Uri.EscapeDataString(album)}";
             using var request = new HttpRequestMessage(HttpMethod.Get, "https://lrclib.net/api/search?" + query);
             request.Headers.UserAgent.ParseAdd("Verseglow/1.0");
             request.Headers.UserAgent.Add(header);
