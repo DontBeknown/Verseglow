@@ -1,4 +1,4 @@
-param([string]$Executable = "$PSScriptRoot/../artifacts/win-x64/MusicLyrics.exe")
+param([string]$Executable = "$PSScriptRoot/../artifacts/win-x64/Verseglow.exe")
 
 $ErrorActionPreference = 'Stop'
 Add-Type -TypeDefinition @'
@@ -52,10 +52,10 @@ $app = Start-Process -FilePath $exe -ArgumentList ('--probe --probe-log "' + $lo
 try {
     $appId = $app.Id
     Wait-For {
-        $window = [MusicLyricsSmoke]::FindWindow($appId, "MusicLyrics overlay")
+        $window = [MusicLyricsSmoke]::FindWindow($appId, "Verseglow overlay")
         $window -ne [IntPtr]::Zero -and [MusicLyricsSmoke]::IsWindowVisible($window)
     } "The playback probe did not show its sample overlay."
-    $overlay = [MusicLyricsSmoke]::FindWindow($appId, "MusicLyrics overlay")
+    $overlay = [MusicLyricsSmoke]::FindWindow($appId, "Verseglow overlay")
     $messages = [MusicLyricsSmoke]::FindWindow($appId, "MusicLyrics messages")
     $styles = [MusicLyricsSmoke]::GetWindowLong($overlay, -20).ToInt64()
     $expected = 0x080800A8

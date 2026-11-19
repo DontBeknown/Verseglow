@@ -3,3 +3,6 @@
 artifacts/
 *.user
 
+/REQUIREMENTS.md
+/PRODUCT.md
+/DESIGN.md

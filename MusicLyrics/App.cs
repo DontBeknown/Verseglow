@@ -51,7 +51,7 @@ internal sealed class App : Application
         preferences = Preferences.Load();
         overlay = new Window
         {
-            Title = "MusicLyrics overlay",
+            Title = "Verseglow overlay",
             AllowsTransparency = true, WindowStyle = WindowStyle.None, ResizeMode = ResizeMode.NoResize,
             ShowActivated = false, ShowInTaskbar = false, Topmost = true,
             Background = System.Windows.Media.Brushes.Transparent, Content = visual
@@ -86,7 +86,7 @@ internal sealed class App : Application
         tray = new Forms.NotifyIcon
         {
             Icon = trayIcon, ContextMenuStrip = menu,
-            Text = probe ? "MusicLyrics playback probe" : "MusicLyrics", Visible = true
+            Text = probe ? "Verseglow playback probe" : "Verseglow", Visible = true
         };
         tray.DoubleClick += (_, _) => OpenSettings();
         SetShortcut(preferences.Shortcut, save: false);
@@ -127,7 +127,7 @@ internal sealed class App : Application
             overlay.Show();
             ApplyPlacement();
         }
-        var style = Active;
+        var style = Active.ForSong(player.Track);
         if (backdropBlur != style.Blur)
         {
             Native.SetBackdropBlur(new WindowInteropHelper(overlay).Handle, style.Blur);

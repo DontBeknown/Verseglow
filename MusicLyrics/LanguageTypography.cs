@@ -20,9 +20,12 @@ internal static class LanguageTypography
     [DllImport("icu.dll")]
     private static extern int uscript_getScript(int scalar, ref int error);
 
+    internal static bool HasThai(string text) => text.Any(c => c is >= '\u0E01' and <= '\u0E5B');
+    internal static readonly FontFamily Kanit = new(new Uri("pack://application:,,,/Verseglow;component/"), "./Fonts/#Kanit");
+
     public static void Apply(FormattedText layout, string text, Dictionary<string, string> fonts, string? language)
     {
-        if (fonts.Count == 0) return;
+        if (fonts.Count == 0 && !HasThai(text)) return;
         var scripts = new Dictionary<int, string?>();
         foreach (var (tag, family) in fonts)
         {
@@ -34,7 +37,7 @@ internal static class LanguageTypography
         }
         if (language is not null)
         {
-                        var family = fonts.Where(entry => language.Equals(entry.Key, StringComparison.OrdinalIgnoreCase) ||
+            var family = fonts.Where(entry => language.Equals(entry.Key, StringComparison.OrdinalIgnoreCase) ||
                     language.StartsWith(entry.Key + "-", StringComparison.OrdinalIgnoreCase))
                 .OrderByDescending(entry => entry.Key.Length).Select(entry => entry.Value).FirstOrDefault();
 var codes = new int[16];
@@ -42,6 +45,9 @@ var codes = new int[16];
             if (error <= 0)
                 foreach (var code in codes.Take(count)) scripts[code] = family;
         }
+        // ICU USCRIPT_THAI is 38. Keep any explicit font override.
+        const int thaiScript = 38;
+        if (scripts.GetValueOrDefault(thaiScript) is null) scripts[thaiScript] = "Kanit Bold";
         int start = 0, offset = 0;
         string? current = null;
         foreach (var rune in text.EnumerateRunes())
@@ -51,12 +57,21 @@ var codes = new int[16];
             var next = script is 0 or 1 ? current : scripts.GetValueOrDefault(script);
             if (next != current)
             {
-                if (current is not null) layout.SetFontFamily(current, start, offset - start);
+                ApplyRun();
                 current = next;
                 start = offset;
             }
             offset += rune.Utf16SequenceLength;
         }
-        if (current is not null) layout.SetFontFamily(current, start, offset - start);
+        ApplyRun();
+
+        void ApplyRun()
+        {
+            if (current is null) return;
+            var family = current is "Kanit" or "Kanit Bold" ? Kanit : new FontFamily(current);
+            layout.SetFontFamily(family, start, offset - start);
+            if (current == "Kanit Bold")
+                layout.SetFontWeight(System.Windows.FontWeights.Bold, start, offset - start);
+        }
     }
 }

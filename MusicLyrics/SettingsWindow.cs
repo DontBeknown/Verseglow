@@ -49,6 +49,9 @@ internal sealed class SettingsWindow : Window
     private readonly Slider font = Slider(12, 100, 1);
     private readonly ComboBox language = new() { DisplayMemberPath = "DisplayName" };
     private readonly ComboBox family = new();
+    private readonly ComboBox maxLineColors = new() { ItemsSource = Enumerable.Range(1, Preset.MaxAccentColors + 1) };
+    private readonly ComboBox maxHighlightWords = new() { ItemsSource = Enumerable.Range(0, 33) };
+    private readonly ComboBox highlightSize = new() { ItemsSource = Enumerable.Range(12, 89).Cast<object>().Prepend("Preset default") };
     private readonly Slider outline = Slider(0, 6, .5);
     private readonly Slider tilt = Slider(0, 15, 1);
     private readonly CheckBox scatter = new() { Content = "Scatter short lines inside the overlay" };
@@ -61,7 +64,8 @@ internal sealed class SettingsWindow : Window
     private readonly Slider background = Slider(0, 1, .05);
     private readonly Slider duration = Slider(80, 250, 1);
     private readonly Slider scale = Slider(.80, 1, .01);
-    private readonly LyricVisual preview = new() { Height = 112 };
+    private readonly Slider stageStackSpeed = Slider(1, 4, .25);
+    private readonly LyricVisual preview = new();
     private readonly DispatcherTimer previewTimer = new() { Interval = TimeSpan.FromSeconds(2.4) };
     private readonly TabControl tabs = new();
     private readonly TabItem presetTab = new() { Header = "Presets" };
@@ -79,12 +83,6 @@ internal sealed class SettingsWindow : Window
     private bool closing;
     private Hotkey draftShortcut;
     private Preset draft = Preset.BuiltIns[0];
-    private static readonly (string Name, string[] Colors)[] Palettes =
-    [
-        ("Warm", ["#FFF4DE", "#FFE58A", "#FFA69A", "#FFD0A1"]),
-        ("Cool", ["#EAF6FF", "#A7DDFF", "#A8F0DD", "#C9BBFF"]),
-        ("Monochrome", ["#FFFFFF", "#EBEBEB", "#D7D7D7", "#C4C4C4"])
-    ];
     private static readonly string[] Samples =
     [
         "Follow the words wherever you go",
@@ -99,14 +97,14 @@ internal sealed class SettingsWindow : Window
         this.preferences = preferences;
         this.save = save;
         draftShortcut = preferences.Shortcut;
-        Title = "MusicLyrics Settings";
+        Title = "Verseglow";
 #pragma warning disable WPF0001
         ThemeMode = ThemeMode.Dark;
 #pragma warning restore WPF0001
         FontFamily = new FontFamily("Segoe UI Variable Text");
         FontSize = 14;
-        Width = 720;
-        Height = 720;
+        Width = Math.Min(1080, SystemParameters.WorkArea.Width);
+        Height = Math.Min(740, SystemParameters.WorkArea.Height);
         MinWidth = 460;
         MinHeight = 510;
         WindowStartupLocation = WindowStartupLocation.CenterScreen;
@@ -179,16 +177,24 @@ internal sealed class SettingsWindow : Window
 
         advanced.Children.Add(shortcutStatus);
 
-        var editor = new StackPanel { Margin = new Thickness(18) };
-        var previewCard = new Border { CornerRadius = new CornerRadius(14), Padding = new Thickness(8),
-            Background = new LinearGradientBrush(Color.FromRgb(72, 42, 105), Color.FromRgb(27, 21, 48), 25),
-            Child = new Grid { ClipToBounds = true, Children = { previewBackdrop, preview } }, Margin = new Thickness(18, 10, 18, 0) };
-        var stripes = new LinearGradientBrush { StartPoint = new Point(0, 0), EndPoint = new Point(1, .6) };
-        foreach (var (offset, shade) in new[] { (0d, "#282443"), (.30, "#683953"), (.30, "#97617B"), (.46, "#97617B"), (.46, "#333D58"), (.75, "#536877"), (1d, "#302340") })
-            stripes.GradientStops.Add(new GradientStop((Color)ColorConverter.ConvertFromString(shade), offset));
-        previewBackdrop.Background = stripes;
+        var editor = new StackPanel { Margin = new Thickness(18, 12, 18, 16) };
+        var stage = new DockPanel { Margin = new Thickness(12) };
+        var previewToolbar = new DockPanel();
+        var replay = Button("Replay preview", RestartPreview);
+        DockPanel.SetDock(replay, Dock.Right);
+        previewToolbar.Children.Add(replay);
+        var previewTitle = Heading("Live preview");
+        previewTitle.VerticalAlignment = VerticalAlignment.Center;
+        previewToolbar.Children.Add(previewTitle);
+        DockPanel.SetDock(previewToolbar, Dock.Top);
+        stage.Children.Add(previewToolbar);
+        previewBackdrop.Background = new LinearGradientBrush(new GradientStopCollection
+        {
+            new(Color.FromRgb(23, 47, 52), 0), new(Color.FromRgb(44, 79, 81), .52),
+            new(Color.FromRgb(26, 52, 59), .53), new(Color.FromRgb(17, 33, 41), 1)
+        }, 62);
+        stage.Children.Add(new Grid { ClipToBounds = true, Children = { previewBackdrop, preview } });
         editor.Children.Add(Field("_Preset", presets));
-        editor.Children.Add(Row(Button("Replay preview", RestartPreview), Button("Reset to default", ResetPreset)));
         editor.Children.Add(presetStatus);
         editor.Children.Add(presetNotice);
 
@@ -198,10 +204,12 @@ internal sealed class SettingsWindow : Window
             Entrance.Ripple => "Word Ripple", Entrance.WordByWord => "Word by word", Entrance.Cinema => "Frosted Cinema",
             _ => effect.ToString()
         } }).ToArray();
-        palette.ItemsSource = Palettes.Select(p => p.Name).Prepend("Custom").ToArray();
+        palette.ItemsSource = Preset.Palettes.Select(p => p.Name).Prepend("Custom").Append("Random per song").ToArray();
         addColor = Button("Add color…", () => PickPaletteColor(draft.AccentColors.Length + 1));
         var durationField = Field("Entrance _duration (ms)", duration);
         var scaleField = Field("Pop start _scale", scale);
+        var stackSpeedField = Field("Stage Stack _speed (1×–4×)", stageStackSpeed);
+        stageStackSpeed.AutoToolTipPrecision = 2;
         var languages = LanguageTypography.Languages.Values.OrderBy(c => c.DisplayName)
             .Select(c => new { c.Name, c.DisplayName }).Prepend(new { Name = "", DisplayName = "Preset default (all languages)" }).ToArray();
         language.ItemsSource = languages;
@@ -211,18 +219,23 @@ internal sealed class SettingsWindow : Window
         language.SelectionChanged += (_, _) => { SyncFamily(); RestartPreview(); };
         family.SelectionChanged += (_, _) => ChangeFamily();
         outlinePicker = Button("Outline color…", PickOutlineColor);
-        var appearance = Card(Heading("Customize appearance"), Field("_Entrance", entrance),
+        editor.Children.Add(InspectorSection("Motion", true, Field("_Entrance", entrance),
+            durationField, scaleField, stackSpeedField, Field("Maximum tilt (degrees)", tilt), scatter));
+        editor.Children.Add(InspectorSection("Typography", false, Field("_Font size", font),
             Field("Font for language", language), Field("Font family", family),
-            Field("_Font size", font), Field("Color _palette", palette), swatches, addColor,
-            Field("Outline width", outline), outlinePicker, Field("Maximum tilt (degrees)", tilt), scatter, blur,
-            Field("_Background opacity", background), durationField, scaleField);
-        editor.Children.Add(appearance);
-        editor.Children.Add(Card(Field("Custom preset _name", name),
+            Field("Highlighted font size", highlightSize), Field("Outline width", outline)));
+        editor.Children.Add(InspectorSection("Color and emphasis", false, Field("Color _palette", palette), swatches, addColor,
+            Field("Maximum text colors per line (includes main color)", maxLineColors),
+            Field("Maximum highlighted words per line", maxHighlightWords), outlinePicker,
+            Field("_Background opacity", background), blur));
+        editor.Children.Add(InspectorSection("Manage preset", false, Button("Reset to default", ResetPreset), Field("Custom preset _name", name),
             Row(Button("Duplicate as custom", DuplicatePreset), Button("Rename", RenamePreset), Button("Delete", DeletePreset))));
         durationField.SetBinding(VisibilityProperty, new System.Windows.Data.Binding(nameof(IsEnabled))
             { Source = duration, Converter = new BooleanToVisibilityConverter() });
         scaleField.SetBinding(VisibilityProperty, new System.Windows.Data.Binding(nameof(IsEnabled))
             { Source = scale, Converter = new BooleanToVisibilityConverter() });
+        stackSpeedField.SetBinding(VisibilityProperty, new System.Windows.Data.Binding(nameof(IsEnabled))
+            { Source = stageStackSpeed, Converter = new BooleanToVisibilityConverter() });
         presets.SelectionChanged += (_, _) =>
         {
             if (loadingPreset || presets.SelectedItem is not string selected) return;
@@ -230,15 +243,24 @@ internal sealed class SettingsWindow : Window
             preferences.ActivePreset = selected;
             save();
         };
+        foreach (var control in new[] { maxLineColors, maxHighlightWords, highlightSize })
+            control.SelectionChanged += (_, _) => DraftChanged();
         entrance.SelectionChanged += (_, _) => DraftChanged();
         palette.SelectionChanged += (_, _) =>
         {
-            if (loadingPreset || palette.SelectedIndex <= 0) return;
-            var colors = Palettes[palette.SelectedIndex - 1].Colors;
-            CommitPreset(draft with { Color = colors[0], AccentColors = colors[1..] });
-            UpdatePalette();
+                        if (loadingPreset || palette.SelectedIndex < 0) return;
+            if (palette.SelectedIndex == Preset.Palettes.Length + 1)
+                CommitPreset(draft with { RandomPalettePerSong = true });
+            else if (palette.SelectedIndex == 0)
+                CommitPreset(draft with { RandomPalettePerSong = false });
+            else
+            {
+                var colors = Preset.Palettes[palette.SelectedIndex - 1].Colors;
+                CommitPreset(draft with { Color = colors[0], AccentColors = colors[1..], RandomPalettePerSong = false });
+            }
+UpdatePalette();
         };
-        foreach (var control in new[] { font, background, duration, scale, outline, tilt })
+        foreach (var control in new[] { font, background, duration, scale, outline, tilt, stageStackSpeed })
         {
             control.ValueChanged += (_, _) => DraftChanged();
             control.AutoToolTipPlacement = System.Windows.Controls.Primitives.AutoToolTipPlacement.TopLeft;
@@ -247,25 +269,27 @@ internal sealed class SettingsWindow : Window
         scatter.Click += (_, _) => DraftChanged();
         blur.Click += (_, _) => DraftChanged();
         previewTimer.Tick += (_, _) => PlaySample(advance: true);
-        tabs.Items.Add(new TabItem { Header = "Now playing", Content = Scroll(playback) });
         var presetPage = new DockPanel();
-        DockPanel.SetDock(previewCard, Dock.Top);
-        presetPage.Children.Add(previewCard);
+        presetPage.Children.Add(stage);
         presetPage.Children.Add(Scroll(editor));
+        presetPage.SizeChanged += (_, args) =>
+        {
+            var wide = args.NewSize.Width >= 730;
+            DockPanel.SetDock(stage, wide ? Dock.Left : Dock.Top);
+            stage.Width = wide ? args.NewSize.Width - 344 : double.NaN;
+            stage.Height = wide ? double.NaN : Math.Clamp(args.NewSize.Height * .37, 130, 230);
+        };
         presetTab.Content = presetPage;
         tabs.Items.Add(presetTab);
+        tabs.SelectedItem = presetTab;
+        tabs.Items.Add(new TabItem { Header = "Now playing", Content = Scroll(playback) });
         tabs.Items.Add(new TabItem { Header = "Settings", Content = Scroll(advanced) });
         tabs.SelectionChanged += (sender, args) =>
         {
             if (ReferenceEquals(args.Source, tabs)) UpdatePreview();
         };
-        var shell = new DockPanel { Margin = new Thickness(18) };
-        var heading = new TextBlock { Text = "MusicLyrics", FontWeight = FontWeights.Bold,
-            FontSize = 32, Foreground = Brushes.Thistle, Margin = new Thickness(5, 0, 0, 12) };
-        DockPanel.SetDock(heading, Dock.Top);
-        shell.Children.Add(heading);
-        shell.Children.Add(tabs);
-        Content = shell;
+        tabs.Margin = new Thickness(12);
+        Content = tabs;
         IsVisibleChanged += (_, _) => UpdatePreview();
         StateChanged += (_, _) => UpdatePreview();
         player.Changed += RefreshPlayback;
@@ -427,11 +451,15 @@ internal sealed class SettingsWindow : Window
         scatter.IsChecked = preset.Scatter;
         blur.IsChecked = preset.Blur;
         font.Value = preset.FontSize;
+        maxLineColors.SelectedItem = preset.MaxLineColors;
+        maxHighlightWords.SelectedItem = preset.MaxHighlightWords;
+        highlightSize.SelectedIndex = preset.HighlightFontSize is int size ? size - 11 : 0;
         UpdatePalette();
         UpdateOutlineSwatch();
         background.Value = preset.Background;
         duration.Value = preset.Duration;
         scale.Value = preset.Scale;
+        stageStackSpeed.Value = preset.StageStackSpeed;
         UpdateEffectFields();
         name.Text = preferences.Custom.Contains(preset) ? preset.Name : "";
         presetStatus.Text = "";
@@ -444,6 +472,7 @@ internal sealed class SettingsWindow : Window
     {
         duration.IsEnabled = draft.Effect is Entrance.Pop or Entrance.Fade or Entrance.Ripple;
         scale.IsEnabled = draft.Effect == Entrance.Pop;
+        stageStackSpeed.IsEnabled = draft.Effect == Entrance.Stack;
     }
 
     private void SyncFamily()
@@ -522,8 +551,9 @@ internal sealed class SettingsWindow : Window
         var colors = draft.AccentColors.Prepend(draft.Color).ToArray();
         var loading = loadingPreset;
         loadingPreset = true;
-        palette.SelectedIndex = Array.FindIndex(Palettes, p => p.Colors.SequenceEqual(colors, StringComparer.OrdinalIgnoreCase)) + 1;
+        palette.SelectedIndex = draft.RandomPalettePerSong ? Preset.Palettes.Length + 1 : Array.FindIndex(Preset.Palettes, p => p.Colors.SequenceEqual(colors, StringComparer.OrdinalIgnoreCase)) + 1;
         loadingPreset = loading;
+        swatches.Visibility = addColor.Visibility = draft.RandomPalettePerSong ? Visibility.Collapsed : Visibility.Visible;
         swatches.Children.Clear();
         for (var i = 0; i < colors.Length; i++)
         {
@@ -567,9 +597,11 @@ internal sealed class SettingsWindow : Window
         if (loadingPreset || entrance.SelectedValue is not Entrance effect) return;
         CommitPreset(draft with
         {
+            MaxLineColors = (int)maxLineColors.SelectedItem, MaxHighlightWords = (int)maxHighlightWords.SelectedItem,
+            HighlightFontSize = highlightSize.SelectedItem as int?,
             Effect = effect, Outline = outline.Value, Tilt = tilt.Value, Scatter = scatter.IsChecked == true,
             Blur = blur.IsChecked == true, FontSize = font.Value, Background = background.Value,
-            Duration = (int)duration.Value, Scale = scale.Value
+            Duration = (int)duration.Value, Scale = scale.Value, StageStackSpeed = stageStackSpeed.Value
         });
         UpdateEffectFields();
     }
@@ -663,7 +695,7 @@ internal sealed class SettingsWindow : Window
         var tag = language.SelectedValue as string ?? "";
         var sample = tag.Length > 0 ? LanguageTypography.Languages[tag].NativeName + "  ·  " + Samples[sampleIndex] : Samples[sampleIndex];
         previewBackdrop.Effect = draft.Blur ? new System.Windows.Media.Effects.BlurEffect { Radius = 14 } : null;
-        preview.SetLine(sample, draft, true, Stopwatch.GetTimestamp(), language: tag, cue: sampleIndex);
+        preview.SetLine(sample, draft.ForSong(player.Track), true, Stopwatch.GetTimestamp(), language: tag, cue: sampleIndex);
     }
 
     private static Slider Slider(double min, double max, double step) => new()
@@ -693,6 +725,13 @@ internal sealed class SettingsWindow : Window
     {
         Text = text, FontSize = 16, FontWeight = FontWeights.SemiBold, Margin = new Thickness(0, 0, 0, 6)
     };
+
+    private static Expander InspectorSection(string title, bool open, params UIElement[] controls)
+    {
+        var fields = new StackPanel { Margin = new Thickness(4, 0, 4, 8) };
+        foreach (var control in controls) fields.Children.Add(control);
+        return new Expander { Header = title, IsExpanded = open, Content = fields, Margin = new Thickness(0, 5, 0, 0) };
+    }
 
     private static Border Card(params UIElement[] children)
     {

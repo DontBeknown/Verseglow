@@ -15,6 +15,8 @@ void Check(bool condition, string name)
     checks++;
 }
 
+Check(Preset.Palettes.All(p => p.Colors.Length == 8 && p.Colors.All(Preset.ValidColor) &&
+    p.Colors.Distinct(StringComparer.OrdinalIgnoreCase).Count() == 8), "Each palette has eight distinct valid colors");
 var factory = Preset.BuiltIns[0];
 var colors = factory with { AccentColors = ["#112233", "#334455"] };
 Check(LyricVisual.WordVisible(0, 0, 4) && !LyricVisual.WordVisible(.24, 1, 4) &&
@@ -27,6 +29,7 @@ try
         {"ActivePreset":"Frosted Cinema","Custom":[{"Name":"Legacy","Effect":4,"FontSize":42,"Color":"#FFFFFF","Background":0.5,"Duration":170,"Scale":0.92}]}
         """);
     var settings = Preferences.Load(settingsFile);
+    Check(settings.Custom.Single().StageStackSpeed == 1, "Older presets default to the original Stage Stack speed");
     Check(settings.Presets.Single(p => p.Name == settings.ActivePreset).Effect == Entrance.Cinema,
         "Legacy settings use the updated Frosted Cinema factory effect");
     var legacy = settings.Custom.Single() with { Effect = Entrance.Fade };
@@ -34,22 +37,23 @@ try
     settings.ResetPreset(legacy);
     Check(settings.Custom.Single().FontSize == factory.FontSize, "Legacy custom preset resets to its base");
 
-    var edited = colors with { FontSize = 40, Effect = Entrance.WordByWord };
+    var edited = colors with { FontSize = 40, Effect = Entrance.WordByWord, StageStackSpeed = 2 };
     settings.UpdatePreset(edited);
-    var copy = edited.Duplicate("Copy") with { FontSize = 51 };
+    var copy = edited.Duplicate("Copy") with { FontSize = 51, StageStackSpeed = 3 };
     settings.Custom.Add(copy);
     settings.ActivePreset = copy.Name;
     settings.Save(settingsFile);
     settings = Preferences.Load(settingsFile);
     Check(settings.ActivePreset == copy.Name && settings.Presets.First().FontSize == 40 &&
-        settings.Presets.First().Effect == Entrance.WordByWord && settings.Custom.Last().FontSize == 51,
+        settings.Presets.First().Effect == Entrance.WordByWord && settings.Presets.First().StageStackSpeed == 2 &&
+        settings.Custom.Last().FontSize == 51 && settings.Custom.Last().StageStackSpeed == 3,
         "Built-in overrides and custom presets survive restart");
     settings.ResetPreset(settings.Presets.First());
     Check(settings.Presets.First() == factory && settings.Custom.Last().FontSize == 51,
         "Built-in reset affects only that preset");
     settings.ResetPreset(settings.Custom.Last());
     var reset = settings.Custom.Last();
-    Check(reset.Name == copy.Name && reset.FontSize == 40 && reset.Effect == Entrance.WordByWord &&
+    Check(reset.Name == copy.Name && reset.FontSize == 40 && reset.Effect == Entrance.WordByWord && reset.StageStackSpeed == 2 &&
         reset.AccentColors.SequenceEqual(colors.AccentColors), "Custom reset restores its creation snapshot");
 }
 finally { File.Delete(settingsFile); }
@@ -138,7 +142,7 @@ using (var online = new Lrclib(null, handler))
     var spotify = await online.SearchAsync(track.Title, track.Artist, track.Album, default);
     Check(Lyrics.Match(track, spotify)?.Id == 42 && handler.LastUri?.Query ==
         "?track_name=Song&artist_name=Artist&album_name=Album", "Spotify metadata produces a timed lookup");
-    Check(handler.UserAgent == "MusicLyrics/1.0 (https://example.com/musiclyrics)", "Lookup identifies the client");
+    Check(handler.UserAgent == "Verseglow/1.0 (https://example.com/musiclyrics)", "Lookup identifies the client");
     var youtube = Lyrics.BrowserTrack(new Track("Artist - Song (Official Video)", "ArtistVEVO", "", 180));
     var browserResults = await online.SearchAsync(youtube.Title, youtube.Artist, youtube.Album, default);
     Check(Lyrics.Match(youtube, browserResults, browser: true)?.Id == 42 && handler.LastUri?.Query ==
@@ -165,13 +169,26 @@ var uiThread = new Thread(() =>
     var window = new SettingsWindow(player, settings, () => applied++, _ => true, () => { }, () => { });
     try
     {
+        var tabs = (TabControl)window.Content;
+        var studio = (DockPanel)((TabItem)tabs.SelectedItem).Content;
+        var stage = (DockPanel)studio.Children[0];
+        foreach (var width in new[] { 980, 420, 980 })
+        {
+            tabs.Measure(new Size(width, 580));
+            tabs.Arrange(new Rect(0, 0, width, 580));
+            tabs.UpdateLayout();
+            Check(width >= 730
+                ? DockPanel.GetDock(stage) == Dock.Left && stage.ActualWidth > width / 2
+                : DockPanel.GetDock(stage) == Dock.Top && stage.ActualHeight < 290,
+                "Preset editor keeps both the sample and inspector in view");
+        }
         var combos = Descendants(window).OfType<ComboBox>().ToArray();
         var presets = combos.Single(combo => combo.Items.Contains("Frosted Cinema"));
         presets.SelectedItem = "Frosted Cinema";
         Check(settings.ActivePreset == "Frosted Cinema" && applied == 1, "Preset selection applies immediately");
         var palettes = combos.Single(combo => combo.Items.Contains("Monochrome"));
         palettes.SelectedItem = "Cool";
-        Check(settings.Presets.Last().AccentColors.Length == 3 && applied == 2, "Palette selection applies immediately");
+        Check(settings.Presets.Last().AccentColors.Length == 7 && applied == 2, "Palette selection applies immediately");
         var entrance = combos.Single(combo => combo.SelectedValue is Entrance);
         entrance.SelectedValue = Entrance.WordByWord;
         Check(settings.Presets.Last().Effect == Entrance.WordByWord && applied == 3, "Word entrance applies immediately");
@@ -179,6 +196,24 @@ var uiThread = new Thread(() =>
             .RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
         Check(settings.Presets.Last().Effect == Entrance.Cinema && settings.Presets.Last().AccentColors.Length == 0 &&
             applied == 4, "Reset applies the selected preset's defaults immediately");
+        var speed = Descendants(window).OfType<Label>()
+            .Single(label => label.Content is string text && text.StartsWith("Stage Stack _speed"));
+        var slider = (Slider)speed.Target;
+        Check(!slider.IsEnabled, "Stage Stack speed is unavailable for other entrances");
+        presets.SelectedItem = "Stage Stack";
+        Check(slider.IsEnabled && slider.Value == 1, "Stage Stack shows its speed control");
+        slider.Value = 2;
+        Check(settings.Presets.First().StageStackSpeed == 2 && applied == 6, "Stage Stack speed applies and saves immediately");
+        palettes.SelectedItem = "Random per song";
+        var randomPreset = settings.Presets.First();
+        var songStyle = randomPreset.ForSong(track);
+        var refreshed = randomPreset.ForSong(track with { Duration = 181 });
+        Check(randomPreset.RandomPalettePerSong && songStyle.AccentColors.Length > 0 &&
+            songStyle.Color == refreshed.Color && songStyle.AccentColors.SequenceEqual(refreshed.AccentColors),
+            "Song palette stays stable across timeline updates");
+        palettes.SelectedItem = "Orchid";
+        Check(!settings.Presets.First().RandomPalettePerSong && settings.Presets.First().Color == "#FFF0FD",
+            "Selecting a fixed palette turns off song randomization");
     }
     finally { window.CloseForExit(); }
 
@@ -220,17 +255,51 @@ var uiThread = new Thread(() =>
         "One lyric line renders both accent and main color words");
     Render(accented, false, cue: 1600);
     Check(Rasterize().SequenceEqual(accentedLine), "Accented words stay stable when the current cue redraws");
-    Check(Enumerable.Range(1601, 20).Any(cue =>
+            var positions = new HashSet<int>();
+    for (var cue = 0; cue < 200; cue++)
     {
-        Render(accented, false, cue: cue);
-        return !Rasterize().SequenceEqual(accentedLine);
-    }), "Different cues can accent different words");
-    Render(accented, false, "Solo");
+        Render(accented, false, "go go go!", cue: cue);
+        var frame = Rasterize();
+        positions.Add(pixels.First(i => frame[i + 2] > 180 && frame[i + 1] < 30) / 4 % (int)bounds.Width);
+    }
+    Check(positions.Count == 3, "Every word can receive the accent across cues");
+    Check(LyricVisual.EmphasisWords("ฉันรักเธอ").Length > 1, "Thai words can be selected without spaces");
+    Check(LanguageTypography.Kanit.GetTypefaces().Any(face => face.Weight == FontWeights.Bold && face.TryGetGlyphTypeface(out var glyphs) &&
+        glyphs.FamilyNames.Values.Contains("Kanit") && glyphs.CharacterToGlyphMap.ContainsKey('ก')),
+        "Bundled Kanit Bold resolves with Thai glyphs");
+Render(accented, false, "Solo");
     var solo = Rasterize();
-    Check(pixels.Any(i => solo[i + 2] > 180) &&
-        pixels.Where(i => solo[i + 2] > 180).All(i => solo[i + 1] > 180), "Single word cues keep the main color");
+    Check(pixels.Any(i => solo[i + 2] > 180 && solo[i + 1] < 30), "Single word cues accent their only word");
 
-    Render(cinema, true);
+    var limited = accented with { AccentColors = ["#FF0000", "#00FF00", "#0000FF"], MaxHighlightWords = 2 };
+    var sawTwo = false;
+    for (var cue = 0; cue < 40; cue++)
+    {
+        Render(limited, false, "I I I I", cue: cue);
+        var frame = Rasterize();
+        var columns = new SortedSet<int>();
+        var channels = new HashSet<int>();
+        foreach (var pixel in pixels)
+        {
+            var rgb = frame.AsSpan(pixel, 3);
+            for (var channel = 0; channel < 3; channel++)
+                if (rgb[channel] > 180 && rgb[(channel + 1) % 3] < 30 && rgb[(channel + 2) % 3] < 30)
+                {
+                    columns.Add(pixel / 4 % (int)bounds.Width);
+                    channels.Add(channel);
+                }
+        }
+        var highlighted = columns.Count(x => !columns.Contains(x - 1));
+        Check(channels.Count == 1 && highlighted is 1 or 2, "Line respects both random highlight limits");
+        sawTwo |= highlighted == 2;
+    }
+    Check(sawTwo, "Multiple words can be highlighted");
+    var sizeOnly = limited with { MaxLineColors = 1, HighlightFontSize = 60 };
+    Render(sizeOnly, false, "I");
+    var enlarged = BrightPixels();
+    Render(sizeOnly with { MaxHighlightWords = 0 }, false, "I");
+    Check(enlarged > BrightPixels(), "Highlighted font size works with a single text color");
+Render(cinema, true);
     if (Native.AnimationsEnabled())
     {
         Check(VisualTreeHelper.GetChildrenCount(visual) == 1 &&
@@ -240,7 +309,28 @@ var uiThread = new Thread(() =>
         Render(cinema with { Effect = Entrance.Fade }, true);
         Check(VisualTreeHelper.GetChildrenCount(visual) == 0, "Soft Fade has no text blur");
 
+        var stack = Preset.BuiltIns.First(p => p.Effect == Entrance.Stack);
+        Render(stack, false);
+        var fullStack = BrightPixels();
+        Render(stack, true, elapsed: 900, span: 1600);
+        Check(BrightPixels() < fullStack, "Default Stage Stack is still revealing words partway through the cue");
+        Render(stack with { StageStackSpeed = 2 }, true, elapsed: 900, span: 1600);
+        Check(BrightPixels() == fullStack, "Stage Stack at double speed is fully revealed after half the cue");
+
         var wordByWord = Preset.BuiltIns.First(p => p.Effect == Entrance.Fade) with { Effect = Entrance.WordByWord };
+        var outlined = wordByWord with { Font = "Segoe UI", FontSize = 52, Outline = 6, OutlineColor = "#00FF00" };
+        int FirstOutlineColumn()
+        {
+            var frame = Rasterize();
+            return Enumerable.Range(0, frame.Length / 4)
+                .Where(i => frame[i * 4 + 1] > 100 && frame[i * 4 + 2] < 50)
+                .Select(i => i % (int)bounds.Width).DefaultIfEmpty(-1).Min();
+        }
+        Render(outlined, false, "H O");
+        var fullOutline = FirstOutlineColumn();
+        Render(outlined, true, "H O", elapsed: -500);
+        Check(fullOutline > 0 && FirstOutlineColumn() == fullOutline,
+            "An animated word keeps the outline outside its layout box");
         const string wrapped = "The words wrap onto more than one line";
         bounds = new Rect(0, 0, 240, 170);
         Render(wordByWord, true, wrapped, elapsed: -500);

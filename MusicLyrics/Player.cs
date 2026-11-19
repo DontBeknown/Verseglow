@@ -79,7 +79,7 @@ internal sealed class Player : IDisposable
         try { await Sessions.StartAsync(); }
         catch (Exception ex) when (ex is System.Runtime.InteropServices.COMException or UnauthorizedAccessException)
         {
-            sessionError = "Windows media sessions are unavailable. Restart MusicLyrics to try again.";
+            sessionError = "Windows media sessions are unavailable. Restart Verseglow to try again.";
             Log("session-error", detail: ex.Message);
         }
         if (probe is not null) Render(allowAnimation: false);
@@ -325,8 +325,8 @@ internal sealed class Player : IDisposable
             {
                 index = second;
                 lastVisible = true;
-                var text = second >= 0 ? $"MusicLyrics playback probe   {positionMs / 1000:0.000} s" :
-                    "MusicLyrics overlay probe";
+                var text = second >= 0 ? $"Verseglow playback probe   {positionMs / 1000:0.000} s" :
+                    "Verseglow overlay probe";
                 LineChanged?.Invoke(text, false, tick, 0);
             }
             if (clock.Rate > 0 && sample is not null && positionMs < timelineEnd)

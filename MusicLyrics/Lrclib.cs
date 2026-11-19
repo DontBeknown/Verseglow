@@ -58,7 +58,7 @@ internal sealed class Lrclib : IDisposable
             var query = $"track_name={Uri.EscapeDataString(title)}&artist_name={Uri.EscapeDataString(artist)}";
             if (!string.IsNullOrWhiteSpace(album)) query += $"&album_name={Uri.EscapeDataString(album)}";
             using var request = new HttpRequestMessage(HttpMethod.Get, "https://lrclib.net/api/search?" + query);
-            request.Headers.UserAgent.ParseAdd("MusicLyrics/1.0");
+            request.Headers.UserAgent.ParseAdd("Verseglow/1.0");
             request.Headers.UserAgent.Add(header);
             using var response = await http.SendAsync(request, cancellation);
             if (response.StatusCode == HttpStatusCode.TooManyRequests)

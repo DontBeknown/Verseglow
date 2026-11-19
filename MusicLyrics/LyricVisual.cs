@@ -23,6 +23,7 @@ internal sealed class LyricVisual : FrameworkElement
     }
 
     private static readonly Regex Words = new(@"\S+", RegexOptions.Compiled);
+    private static readonly Regex LyricWords = new(@"[\p{L}\p{N}][\p{L}\p{M}\p{N}]*(?:['\u2019-][\p{L}\p{N}][\p{L}\p{M}\p{N}]*)*", RegexOptions.Compiled);
     private static readonly Regex SimpleReadingOrder = new(@"^[\u0020-\u024F\u0300-\u036F\u2000-\u206F\r\n]+$",
         RegexOptions.Compiled);
     private string text = "";
@@ -32,7 +33,7 @@ internal sealed class LyricVisual : FrameworkElement
     private bool animating;
     private double progress = 1;
     private FormattedText? layout;
-    private Geometry?[] ripple = [];
+    private (Geometry? Clip, Geometry? Glyphs)[] ripple = [];
     private Point origin;
     private Transform? placement;
     private Geometry? glyphs;
@@ -41,6 +42,16 @@ internal sealed class LyricVisual : FrameworkElement
     private double animationMs;
     private long cue;
     private CinemaDrawing? cinema;
+    internal static (int Index, int Length)[] EmphasisWords(string text)
+    {
+        if (!LanguageTypography.HasThai(text))
+            return LyricWords.Matches(text).Select(m => (m.Index, m.Length)).ToArray();
+
+        var tokens = new Windows.Data.Text.WordsSegmenter("th").GetTokens(text);
+        return tokens.Where(t => LyricWords.IsMatch(t.Text))
+            .Select(t => ((int)t.SourceTextSegment.StartPosition, (int)t.SourceTextSegment.Length)).ToArray();
+    }
+
     private static bool WordEffect(Entrance effect) =>
         effect is Entrance.Ripple or Entrance.Stack or Entrance.Tilt or Entrance.Fill or Entrance.WordByWord;
     internal static bool WordVisible(double progress, int index, int count) => progress * count >= index;
@@ -73,7 +84,8 @@ internal sealed class LyricVisual : FrameworkElement
         }
         animationMs = entrance switch
         {
-            Entrance.Stack or Entrance.Tilt or Entrance.Fill or Entrance.WordByWord => Math.Max(1, lineMs),
+            Entrance.Stack => Math.Max(1, lineMs / preset.StageStackSpeed),
+            Entrance.Tilt or Entrance.Fill or Entrance.WordByWord => Math.Max(1, lineMs),
             Entrance.Cinema => 240,
             _ => preset.Duration
         };
@@ -181,19 +193,38 @@ internal sealed class LyricVisual : FrameworkElement
                 Trimming = TextTrimming.None
             };
             LanguageTypography.Apply(layout, text, preset.LanguageFonts, language);
-            MatchCollection? words = null;
-            if (preset.AccentColors.Length > 0)
+            var stackSize = preset.Effect == Entrance.Stack && SimpleReadingOrder.IsMatch(text);
+                        if (preset.MaxHighlightWords > 0 && (preset.HighlightFontSize.HasValue || stackSize ||
+                (preset.MaxLineColors > 1 && preset.AccentColors.Length > 0)))
             {
-                words = Words.Matches(text);
-                ApplyWordColors(layout, words);
+                var emphasis = new Random(HashCode.Combine(text, cue));
+                var words = EmphasisWords(text).ToList();
+                var count = emphasis.Next(1, Math.Min(words.Count, preset.MaxHighlightWords) + 1);
+                var accents = preset.AccentColors.Where(c => !c.Equals(preset.Color, StringComparison.OrdinalIgnoreCase))
+                    .Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+                emphasis.Shuffle(accents);
+                var accentCount = Math.Min(preset.MaxLineColors - 1, accents.Length);
+                var endingAvailable = true;
+                for (var i = 0; i < count && words.Count > 0; i++)
+                {
+                    // The original ending gets one extra ticket until selected.
+                    var tickets = words.Count * 4 + (endingAvailable ? 1 : 0);
+                    var index = Math.Min(emphasis.Next(tickets) / 4, words.Count - 1);
+                    var word = words[index];
+                    if (index == words.Count - 1) endingAvailable = false;
+                    words.RemoveAt(index);
+                    if (accentCount > 0)
+                    {
+                        var accent = accents[emphasis.Next(accentCount)];
+                        layout.SetForegroundBrush(new SolidColorBrush((Color)ColorConverter.ConvertFromString(accent)), word.Index, word.Length);
+                    }
+                    if (preset.HighlightFontSize is int size)
+                        layout.SetFontSize(size, word.Index, word.Length);
+                    else if (stackSize)
+                        layout.SetFontSize(preset.FontSize * (1.10 + .10 * emphasis.NextDouble()), word.Index, word.Length);
+                }
             }
-            if (preset.Effect == Entrance.Stack && SimpleReadingOrder.IsMatch(text))
-            {
-                var index = 0;
-                foreach (Match word in words ??= Words.Matches(text))
-                    layout.SetFontSize(preset.FontSize * (index++ % 3 == 0 ? 1.20 : .85), word.Index, word.Length);
-            }
-            origin = new Point(12, Math.Max(0, (ActualHeight - layout.Height) / 2));
+origin = new Point(12, Math.Max(0, (ActualHeight - layout.Height) / 2));
             outline = preset.Outline > 0 ? new Pen(new SolidColorBrush((Color)ColorConverter.ConvertFromString(preset.OutlineColor)), preset.Outline * 2) { LineJoin = PenLineJoin.Round } : null;
             glyphs = outline != null || preset.Tilt > 0 || preset.Scatter ? layout.BuildGeometry(origin) : null;
             placement = null;
@@ -217,8 +248,17 @@ internal sealed class LyricVisual : FrameworkElement
                 placement = new MatrixTransform(matrix);
             }
             if (WordEffect(entrance) && progress < 1)
-                ripple = (words ?? Words.Matches(text)).Select(word =>
-                    layout.BuildHighlightGeometry(origin, word.Index, word.Length)).ToArray();
+            {
+                ripple = Words.Matches(text).Select(word =>
+                {
+                    var clip = layout.BuildHighlightGeometry(origin, word.Index, word.Length);
+                    // Isolate the glyphs before stroking so the outline can extend past the word's layout box.
+                    Geometry? wordGlyphs = clip != null && outline != null && glyphs != null
+                        ? Geometry.Combine(glyphs, clip, GeometryCombineMode.Intersect, null) : null;
+                    wordGlyphs?.Freeze();
+                    return (clip, wordGlyphs);
+                }).ToArray();
+            }
         }
 
         var background = new SolidColorBrush(Color.FromArgb((byte)Math.Round(preset.Background * 255), 0, 0, 0));
@@ -259,21 +299,28 @@ internal sealed class LyricVisual : FrameworkElement
                     opacity = WordVisible(progress, i, ripple.Length) ? 1 : 0;
                 else if (entrance != Entrance.Ripple)
                     opacity = Math.Clamp(progress * ripple.Length - i, 0, 1);
-                if (opacity == 0 || ripple[i] is not { } clip) continue;
+                var word = ripple[i];
+                if (opacity == 0 || word.Clip is not { } clip) continue;
                 var bounds = clip.Bounds;
                 if (bounds.IsEmpty) continue;
-                if (entrance == Entrance.Fill)
-                    drawing.PushClip(new RectangleGeometry(new Rect(bounds.X, bounds.Y, bounds.Width * opacity, bounds.Height)));
+                var sweeping = entrance == Entrance.Fill && opacity < 1;
+                if (sweeping)
+                {
+                    var padding = preset.Outline;
+                    drawing.PushClip(new RectangleGeometry(new Rect(bounds.X - padding, bounds.Y - padding,
+                        bounds.Width * opacity + padding, bounds.Height + 2 * padding)));
+                }
                 if (entrance == Entrance.Stack)
                     drawing.PushTransform(new TranslateTransform(0, (1 - opacity) * preset.FontSize * .32));
                 if (entrance == Entrance.Tilt)
                     drawing.PushTransform(new RotateTransform((1 - opacity) * (i % 2 == 0 ? -13 : 13), bounds.X, bounds.Bottom));
-                drawing.PushClip(clip);
                 drawing.PushOpacity(entrance == Entrance.Fill ? 1 : opacity);
-                DrawLyrics(drawing);
+                if (word.Glyphs != null) drawing.DrawGeometry(null, outline, word.Glyphs);
+                drawing.PushClip(clip);
+                drawing.DrawText(layout!, origin);
                 drawing.Pop();
                 drawing.Pop();
-                if (entrance is Entrance.Fill or Entrance.Stack or Entrance.Tilt) drawing.Pop();
+                if (sweeping || entrance is Entrance.Stack or Entrance.Tilt) drawing.Pop();
             }
             if (placement != null) drawing.Pop();
             return;
@@ -289,21 +336,5 @@ internal sealed class LyricVisual : FrameworkElement
         else DrawLyrics(drawing);
         drawing.Pop();
         if (placement != null) drawing.Pop();
-    }
-
-    private void ApplyWordColors(FormattedText line, MatchCollection words)
-    {
-        if (words.Count < 2) return;
-        var random = new Random(HashCode.Combine(text, cue));
-        var brushes = preset.AccentColors.Select(color =>
-            new SolidColorBrush((Color)ColorConverter.ConvertFromString(color))).ToArray();
-        var remaining = (words.Count + 1) / 3;
-        for (var i = 0; i < words.Count && remaining > 0; i++)
-        {
-            if (random.Next(words.Count - i) >= remaining) continue;
-            var word = words[i];
-            line.SetForegroundBrush(brushes[random.Next(brushes.Length)], word.Index, word.Length);
-            remaining--;
-        }
     }
 }

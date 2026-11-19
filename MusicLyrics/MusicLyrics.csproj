@@ -1,5 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
+    <AssemblyName>Verseglow</AssemblyName>
+    <RootNamespace>MusicLyrics</RootNamespace>
     <OutputType>WinExe</OutputType>
     <TargetFramework>net10.0-windows10.0.22000.0</TargetFramework>
     <UseWPF>true</UseWPF>
@@ -12,6 +14,9 @@
   </PropertyGroup>
   <ItemGroup>
     <InternalsVisibleTo Include="MusicLyrics.Tests" />
+    <Resource Include="Fonts/Kanit-Regular.ttf" />
+    <Resource Include="Fonts/Kanit-Bold.ttf" />
+    <None Update="Fonts/OFL.txt" CopyToOutputDirectory="PreserveNewest" />
     <EmbeddedResource Include="MusicLyrics.ico" />
     <AssemblyMetadata Include="OnlineLyricsCleared" Value="$(OnlineLyricsCleared)" />
     <AssemblyMetadata Include="OnlineLyricsContact" Value="$(OnlineLyricsContact)" />

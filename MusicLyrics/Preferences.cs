@@ -24,7 +24,33 @@ internal sealed record Preset(string Name, Entrance Effect, double FontSize, str
     public bool Blur { get; init; }
     public bool Scatter { get; init; }
     public double Tilt { get; init; }
+    public double StageStackSpeed { get; init; } = 1;
     public string[] AccentColors { get; init; } = [];
+    public int MaxLineColors { get; init; } = 2;
+    public int MaxHighlightWords { get; init; } = 1;
+    public int? HighlightFontSize { get; init; }
+    public bool RandomPalettePerSong { get; init; }
+
+    public Preset ForSong(Track? track)
+    {
+        if (!RandomPalettePerSong) return this;
+        var song = (uint)HashCode.Combine(track?.Title, track?.Artist, track?.Album);
+        var colors = Palettes[song % Palettes.Length].Colors;
+        return this with { Color = colors[0], AccentColors = colors[1..] };
+    }
+
+    internal static readonly (string Name, string[] Colors)[] Palettes =
+    [
+        ("Warm", ["#FFF4DE", "#FFE58A", "#FFA69A", "#FFD0A1", "#FF826F", "#FFB347", "#F69CBA", "#FFD764"]),
+        ("Cool", ["#EAF6FF", "#A7DDFF", "#A8F0DD", "#C9BBFF", "#70C8FF", "#87A5FF", "#74E5E7", "#DBAFFF"]),
+        ("Ocean", ["#E3FAFF", "#45D9FF", "#79B7FF", "#4BE0C0", "#9FF4EB", "#62ACDF", "#92CEFF", "#45C8CC"]),
+        ("Cherry Blossom", ["#FFF2F5", "#FF86AF", "#FFB3CB", "#EA8AA8", "#FFCCD7", "#EBA4D8", "#FF9B98", "#F27CAA"]),
+        ("Citrus", ["#FDFFD8", "#C5EE51", "#FFDA52", "#FFAC52", "#9EE579", "#FFE783", "#E4F783", "#FFBE81"]),
+        ("Midnight Gold", ["#E5E6FF", "#FFCD57", "#EDB74B", "#FFF0A6", "#DBA76C", "#F8DD87", "#A1AFF3", "#B8A7DD"]),
+        ("Mint Chocolate", ["#FFE4CC", "#70ECC2", "#A0F2D3", "#D8AE90", "#67CFB4", "#EFC59A", "#B0DDAD", "#C79585"]),
+        ("Orchid", ["#FFF0FD", "#CD96FF", "#E7B0FF", "#F18EDD", "#AB9DF8", "#F8B4DD", "#D783EF", "#BFB5FF"]),
+        ("Monochrome", ["#FFFFFF", "#EBEBEB", "#D7D7D7", "#C4C4C4", "#F5F5F5", "#B6B6B6", "#A8A8A8", "#999999"])
+    ];
     public static readonly Preset[] BuiltIns =
     [
         new("Stage Stack", Entrance.Stack, 34, "#F4ECFF", .58, 170, .92),
@@ -50,10 +76,12 @@ internal sealed record Preset(string Name, Entrance Effect, double FontSize, str
     public bool IsValid => !string.IsNullOrWhiteSpace(Name) && Enum.IsDefined(Effect) &&
         FontSize is >= 12 and <= 100 && ValidColor(Color) && Background is >= 0 and <= 1 &&
         Outline is >= 0 and <= 6 && Tilt is >= 0 and <= 15 && ValidColor(OutlineColor) &&
+        MaxLineColors is >= 1 and <= MaxAccentColors + 1 && MaxHighlightWords is >= 0 and <= 32 &&
+        HighlightFontSize is null or (>= 12 and <= 100) &&
         AccentColors is { Length: <= MaxAccentColors } && AccentColors.All(ValidColor) &&
         (Font is null || ValidFont(Font)) && LanguageFonts is not null &&
         LanguageFonts.All(kv => LanguageTypography.Languages.ContainsKey(kv.Key) && ValidFont(kv.Value)) &&
-        Duration is >= 80 and <= 250 && Scale is >= .80 and <= 1;
+        Duration is >= 80 and <= 250 && Scale is >= .80 and <= 1 && StageStackSpeed is >= 1 and <= 4;
 
     public static bool ValidColor(string? color) => color is { Length: 7 } && color[0] == '#' && color.Skip(1).All(Uri.IsHexDigit);
     private static bool ValidFont(string? font) => !string.IsNullOrWhiteSpace(font) && font.Length <= 150 &&
