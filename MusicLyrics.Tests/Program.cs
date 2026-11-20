@@ -239,16 +239,19 @@ var uiThread = new Thread(() =>
         palettes.SelectedItem = "Orchid";
         Check(!settings.Presets.First().RandomPalettePerSong && settings.Presets.First().Color == "#FFF0FD",
             "Selecting a fixed palette turns off song randomization");
+        combos.Single(combo => combo.SelectedItem is ExitTransition).SelectedItem = ExitTransition.Lift;
+        Check(settings.Presets.First().Exit == ExitTransition.Lift && settings.Presets.First().Effect == Entrance.Stack,
+            "Exit selection applies independently of entrance");
     }
     finally { window.CloseForExit(); }
 
     var visual = new LyricVisual();
     var bounds = new Rect(0, 0, 340, 100);
     var cinema = Preset.BuiltIns.Last();
-    void Render(Preset preset, bool animate, string text = "The lyric line", int elapsed = 0, double span = 2400, long cue = 0)
+    void Render(Preset preset, bool animate, string text = "The lyric line", int elapsed = 0, double span = 2400, long cue = 0, long? previousCue = null)
     {
         var started = Stopwatch.GetTimestamp() - Stopwatch.Frequency * elapsed / 1000;
-        visual.SetLine(text, preset, animate, started, span, cue: cue);
+        visual.SetLine(text, preset, animate, started, span, cue: cue, previousCue: previousCue);
         visual.Measure(bounds.Size);
         visual.Arrange(bounds);
         visual.UpdateLayout();
@@ -269,6 +272,17 @@ var uiThread = new Thread(() =>
         for (var i = 0; i < pixels.Length; i += 4)
             if (pixels[i + 2] > 180) count++;
         return count;
+    }
+
+    var instant = Preset.BuiltIns.Single(p => p.Effect == Entrance.Instant);
+    Check(instant.Exit == ExitTransition.None && factory.Exit == ExitTransition.Fade, "Default exit matches existing preset behavior");
+    foreach (var exit in Enum.GetValues<ExitTransition>())
+    {
+        Render(instant, false, "Old lyric", cue: 10);
+        Render(instant with { Exit = exit }, true, "New lyric", cue: 20, previousCue: 10);
+        var frame = VisualTreeHelper.GetDrawing(visual)!;
+        var hasExit = frame.Children.OfType<DrawingGroup>().Any(group => group.HasAnimatedProperties);
+        Check(hasExit == (exit != ExitTransition.None && Native.AnimationsEnabled()), $"Instant entrance supports {exit} exit independently");
     }
 
     var accented = Preset.BuiltIns.First(p => p.Effect == Entrance.Fade) with { AccentColors = ["#FF0000"] };

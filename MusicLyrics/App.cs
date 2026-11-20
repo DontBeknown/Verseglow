@@ -138,7 +138,7 @@ internal sealed class App : Application
             backdropBlur = blur;
         }
         visual.SetLine(line, style, animate && !(fullscreen && pauseInFullscreen), stamp, span,
-            player.CurrentLanguage, player.CurrentCue);
+            player.CurrentLanguage, player.CurrentCue, player.PreviousCue);
     }
 
     private void Toggle()

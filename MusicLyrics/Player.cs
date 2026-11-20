@@ -58,6 +58,7 @@ internal sealed class Player : IDisposable
         !CanUseOnline ? "Automatic lyrics lookup is off. Turn it on in Settings or import an LRC." :
         string.IsNullOrEmpty(lookupStatus) ? "No timed lyrics. Search or import a local LRC." : lookupStatus);
     public string? CurrentLanguage => index >= 0 && index < selection.Lines.Count ? selection.Lines[index].Language : null;
+    public long? PreviousCue => probe is null && index > 0 && index < selection.Lines.Count ? selection.Lines[index - 1].AtMs : null;
     public long CurrentCue => index >= 0 && index < selection.Lines.Count ? selection.Lines[index].AtMs : 0;
     public event Action<string, bool, long, double>? LineChanged;
     public event Action? Changed;

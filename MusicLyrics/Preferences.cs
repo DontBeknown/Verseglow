@@ -10,6 +10,8 @@ namespace MusicLyrics;
 
 internal enum Entrance { Fade, Pop, Ripple, Instant, Stack, Tilt, Fill, WordByWord, Cinema }
 
+internal enum ExitTransition { None, Fade, Lift, Recede }
+
 internal sealed record Preset(string Name, Entrance Effect, double FontSize, string Color,
     double Background, int Duration, double Scale)
 {
@@ -22,6 +24,7 @@ internal sealed record Preset(string Name, Entrance Effect, double FontSize, str
     public double Outline { get; init; }
     public string OutlineColor { get; init; } = "#201C28";
     public bool Blur { get; init; }
+    public ExitTransition Exit { get; init; } = Effect == Entrance.Instant ? ExitTransition.None : ExitTransition.Fade;
     public bool Scatter { get; init; }
     public double Tilt { get; init; }
     public double StageStackSpeed { get; init; } = 1;
@@ -85,7 +88,7 @@ internal sealed record Preset(string Name, Entrance Effect, double FontSize, str
     };
 
     [JsonIgnore]
-    public bool IsValid => !string.IsNullOrWhiteSpace(Name) && Enum.IsDefined(Effect) &&
+    public bool IsValid => !string.IsNullOrWhiteSpace(Name) && Enum.IsDefined(Effect) && Enum.IsDefined(Exit) &&
         FontSize is >= 12 and <= 100 && ValidColor(Color) && Background is >= 0 and <= 1 &&
         Outline is >= 0 and <= 6 && Tilt is >= 0 and <= 15 && ValidColor(OutlineColor) &&
         MaxLineColors is >= 1 and <= MaxAccentColors + 1 && MaxHighlightWords is >= 0 and <= 32 &&

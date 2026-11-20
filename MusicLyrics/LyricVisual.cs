@@ -6,6 +6,7 @@ using System.Text.RegularExpressions;
 using System.Windows;
 using System.Windows.Media;
 using System.Windows.Media.Effects;
+using System.Windows.Media.Animation;
 using System.Windows.Threading;
 
 namespace MusicLyrics;
@@ -37,6 +38,11 @@ internal sealed class LyricVisual : FrameworkElement
     };
     private readonly DrawingGroup lineText = new();
     private DrawingGroup? popText;
+    private DrawingGroup? outgoing;
+    private Point anchor = new(.5, .5), priorAnchor;
+    private TranslateTransform? travel;
+    private double transitionMs;
+    private long transitionStart;
     private double progress = 1;
     private FormattedText? layout;
     private (Geometry? Clip, Geometry? Glyphs)[] ripple = [];
@@ -75,14 +81,46 @@ internal sealed class LyricVisual : FrameworkElement
     }
 
     public void SetLine(string line, Preset style, bool animate, long startTick, double lineMs = 2400,
-        string? language = null, long cue = 0)
+        string? language = null, long cue = 0, long? previousCue = null)
     {
         animationTimer.Stop();
+        var motion = animate && Native.AnimationsEnabled();
+        transitionStart = Stopwatch.GetTimestamp();
+        transitionMs = motion && layout != null && previousCue == this.cue && cue != this.cue
+            ? Math.Max(0, Math.Min(320, lineMs * .45) - Stopwatch.GetElapsedTime(startTick).TotalMilliseconds) : 0;
+        priorAnchor = anchor;
+        outgoing = null;
+        if (transitionMs > 0 && style.Exit != ExitTransition.None)
+        {
+            outgoing = new DrawingGroup { Opacity = 0 };
+            using (var snapshot = outgoing.Open())
+            {
+                if (placement != null) snapshot.PushTransform(placement.CloneCurrentValue());
+                if (outline != null) snapshot.DrawGeometry(null, outline, glyphs);
+                snapshot.DrawDrawing(lineText.CloneCurrentValue());
+                if (placement != null) snapshot.Pop();
+            }
+            if (style.Exit == ExitTransition.Lift)
+            {
+                var lift = new TranslateTransform();
+                lift.BeginAnimation(TranslateTransform.YProperty, Ease(0, -Math.Min(24, preset.FontSize * .5)));
+                outgoing.Transform = lift;
+            }
+            else if (style.Exit == ExitTransition.Recede && !outgoing.Bounds.IsEmpty)
+            {
+                var bounds = outgoing.Bounds;
+                var shrink = new ScaleTransform(1, 1, bounds.X + bounds.Width / 2, bounds.Y + bounds.Height / 2);
+                shrink.BeginAnimation(ScaleTransform.ScaleXProperty, Ease(1, .78));
+                shrink.BeginAnimation(ScaleTransform.ScaleYProperty, Ease(1, .78));
+                outgoing.Transform = shrink;
+            }
+            outgoing.BeginAnimation(DrawingGroup.OpacityProperty, Ease(1));
+        }
         text = line;
         this.language = language;
         this.cue = cue;
         preset = style;
-        entrance = animate && Native.AnimationsEnabled() ? style.Effect : Entrance.Instant;
+        entrance = motion ? style.Effect : Entrance.Instant;
         if (WordEffect(entrance) && (!SimpleReadingOrder.IsMatch(text) ||
             text.Any(c => char.GetUnicodeCategory(c) == UnicodeCategory.Format || c is '\u2028' or '\u2029')))
         {
@@ -112,6 +150,14 @@ internal sealed class LyricVisual : FrameworkElement
     public void Finish()
     {
         animationTimer.Stop();
+        transitionMs = 0;
+        if (outgoing != null || travel != null)
+        {
+            outgoing = null;
+            travel?.BeginAnimation(TranslateTransform.XProperty, null);
+            travel?.BeginAnimation(TranslateTransform.YProperty, null);
+            InvalidateVisual();
+        }
         if (progress == 1) return;
         progress = 1;
         UpdateAnimation();
@@ -124,7 +170,9 @@ internal sealed class LyricVisual : FrameworkElement
         {
             if (WordVisible(next, ripple.Length - 1, ripple.Length))
             {
-                Finish();
+                animationTimer.Stop();
+                progress = 1;
+                UpdateAnimation();
                 return;
             }
             var unchanged = (int)(next * ripple.Length) == (int)(progress * ripple.Length);
@@ -150,6 +198,11 @@ internal sealed class LyricVisual : FrameworkElement
         transform.ScaleY = scale;
         popText.Opacity = progress;
     }
+
+    private DoubleAnimation Ease(double from, double to = 0) => new(from, to, TimeSpan.FromMilliseconds(transitionMs))
+    {
+        EasingFunction = new QuadraticEase { EasingMode = EasingMode.EaseOut }, FillBehavior = FillBehavior.Stop
+    };
 
     private void ClearLayout()
     {
@@ -186,7 +239,7 @@ internal sealed class LyricVisual : FrameworkElement
         {
             int hash = 17;
             foreach (var c in text) hash = unchecked(hash * 31 + c);
-            var random = new Random(hash);
+            var random = new Random(preset.Scatter ? unchecked(hash * 31 + cue.GetHashCode()) : hash);
             var color = (Color)ColorConverter.ConvertFromString(preset.Color);
             var direction = text.FirstOrDefault(char.IsLetter);
             var rtl = direction is >= '\u0590' and <= '\u08FF' or >= '\uFB1D' and <= '\uFEFF';
@@ -241,6 +294,8 @@ internal sealed class LyricVisual : FrameworkElement
             outline = preset.Outline > 0 ? new Pen(new SolidColorBrush((Color)ColorConverter.ConvertFromString(preset.OutlineColor)), preset.Outline * 2) { LineJoin = PenLineJoin.Round } : null;
             glyphs = outline != null || preset.Tilt > 0 || preset.Scatter ? layout.BuildGeometry(origin) : null;
             placement = null;
+            travel = null;
+            anchor = new Point(.5, .5);
             if ((preset.Tilt > 0 || preset.Scatter) && glyphs is { Bounds.IsEmpty: false })
             {
                 var bounds = glyphs.GetRenderBounds(outline);
@@ -263,6 +318,14 @@ internal sealed class LyricVisual : FrameworkElement
                 matrix.Translate((ActualWidth - rotated.Width - 12) * x + 6 - rotated.X,
                     (ActualHeight - rotated.Height - 8) * y + 4 - rotated.Y);
                 placement = new MatrixTransform(matrix);
+                anchor = new Point(x, y);
+                if (preset.Scatter && angleEligible && Stopwatch.GetElapsedTime(transitionStart).TotalMilliseconds < transitionMs)
+                {
+                    travel = new TranslateTransform();
+                    travel.BeginAnimation(TranslateTransform.XProperty, Ease((priorAnchor.X - x) * (ActualWidth - rotated.Width - 12)));
+                    travel.BeginAnimation(TranslateTransform.YProperty, Ease((priorAnchor.Y - y) * (ActualHeight - rotated.Height - 8)));
+                    placement = new TransformGroup { Children = { placement, travel } };
+                }
             }
             if (WordEffect(entrance) && progress < 1)
             {
@@ -292,6 +355,7 @@ internal sealed class LyricVisual : FrameworkElement
 
         var background = new SolidColorBrush(Color.FromArgb((byte)Math.Round(preset.Background * 255), 0, 0, 0));
         drawing.DrawRoundedRectangle(background, null, new Rect(0, 0, ActualWidth, ActualHeight), 8, 8);
+        if (outgoing != null) drawing.DrawDrawing(outgoing);
         if (showCinema)
         {
             if (cinema is null)

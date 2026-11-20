@@ -42,6 +42,7 @@ internal sealed class SettingsWindow : Window
     private readonly TextBox shortcut = new() { IsReadOnly = true };
     private readonly ComboBox presets = new();
     private readonly ComboBox entrance = new() { DisplayMemberPath = "Label", SelectedValuePath = "Effect" };
+    private readonly ComboBox exit = new() { ItemsSource = Enum.GetValues<ExitTransition>() };
     private readonly TextBox name = new() { MaxLength = 50 };
     private readonly TextBlock trackHeading = new() { FontSize = 21, FontWeight = FontWeights.SemiBold, TextWrapping = TextWrapping.Wrap };
     private readonly TextBlock trackArtist = new() { TextWrapping = TextWrapping.Wrap };
@@ -219,7 +220,7 @@ internal sealed class SettingsWindow : Window
         language.SelectionChanged += (_, _) => { SyncFamily(); RestartPreview(); };
         family.SelectionChanged += (_, _) => ChangeFamily();
         outlinePicker = Button("Outline color…", PickOutlineColor);
-        editor.Children.Add(InspectorSection("Motion", true, Field("_Entrance", entrance),
+        editor.Children.Add(InspectorSection("Motion", true, Field("_Entrance", entrance), Field("E_xit transition", exit),
             durationField, scaleField, stackSpeedField, Field("Maximum tilt (degrees)", tilt), scatter));
         editor.Children.Add(InspectorSection("Typography", false, Field("_Font size", font),
             Field("Font for language", language), Field("Font family", family),
@@ -245,6 +246,7 @@ internal sealed class SettingsWindow : Window
         };
         foreach (var control in new[] { maxLineColors, maxHighlightWords, highlightSize })
             control.SelectionChanged += (_, _) => DraftChanged();
+        exit.SelectionChanged += (_, _) => DraftChanged();
         entrance.SelectionChanged += (_, _) => DraftChanged();
         palette.SelectionChanged += (_, _) =>
         {
@@ -445,6 +447,7 @@ UpdatePalette();
         loadingPreset = true;
         draft = preset;
         entrance.SelectedValue = preset.Effect;
+        exit.SelectedItem = preset.Exit;
         SyncFamily();
         outline.Value = preset.Outline;
         tilt.Value = preset.Tilt;
@@ -597,12 +600,12 @@ UpdatePalette();
 
     private void DraftChanged()
     {
-        if (loadingPreset || entrance.SelectedValue is not Entrance effect) return;
+        if (loadingPreset || entrance.SelectedValue is not Entrance effect || exit.SelectedItem is not ExitTransition exitEffect) return;
         CommitPreset(draft with
         {
             MaxLineColors = (int)maxLineColors.SelectedItem, MaxHighlightWords = (int)maxHighlightWords.SelectedItem,
             HighlightPercent = highlightSize.SelectedItem as int?,
-            Effect = effect, Outline = outline.Value, Tilt = tilt.Value, Scatter = scatter.IsChecked == true,
+            Effect = effect, Exit = exitEffect, Outline = outline.Value, Tilt = tilt.Value, Scatter = scatter.IsChecked == true,
             Blur = blur.IsChecked == true, FontSize = font.Value, Background = background.Value,
             Duration = (int)duration.Value, Scale = scale.Value, StageStackSpeed = stageStackSpeed.Value
         });
@@ -698,7 +701,8 @@ UpdatePalette();
         var tag = language.SelectedValue as string ?? "";
         var sample = tag.Length > 0 ? LanguageTypography.Languages[tag].NativeName + "  ·  " + Samples[sampleIndex] : Samples[sampleIndex];
         previewBackdrop.Effect = draft.Blur ? new System.Windows.Media.Effects.BlurEffect { Radius = 14 } : null;
-        preview.SetLine(sample, draft.ForSong(player.Track), true, Stopwatch.GetTimestamp(), language: tag, cue: sampleIndex);
+        preview.SetLine(sample, draft.ForSong(player.Track), true, Stopwatch.GetTimestamp(), language: tag, cue: sampleIndex,
+            previousCue: (sampleIndex + Samples.Length - 1) % Samples.Length);
     }
 
     private static Slider Slider(double min, double max, double step) => new()
